@@ -2,6 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <application android:theme="@style/Theme.Sweet" android:label="Sweet" android:allowBackup="true" android:supportsRtl="true">
+        <activity android:name=".LookbookActivity" android:screenOrientation="portrait" android:exported="false"/>
         <activity android:name=".GalleryActivity" android:screenOrientation="portrait" android:exported="false"/>
         <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
             <intent-filter>
