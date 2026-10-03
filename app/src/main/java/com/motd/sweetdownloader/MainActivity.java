@@ -3,7 +3,11 @@ package com.motd.sweetdownloader;
 import android.Manifest;
 import android.app.Activity;
 import android.content.ContentValues;
+import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -15,11 +19,24 @@ import android.view.Gravity;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.face.Face;
+import com.google.mlkit.vision.face.FaceDetection;
+import com.google.mlkit.vision.face.FaceDetector;
+import com.google.mlkit.vision.face.FaceDetectorOptions;
+import com.google.mlkit.vision.label.ImageLabel;
+import com.google.mlkit.vision.label.ImageLabeler;
+import com.google.mlkit.vision.label.defaults.ImageLabelerOptions;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -31,8 +48,16 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -42,16 +67,34 @@ public class MainActivity extends Activity {
     private EditText urlInput;
     private Button downloadButton;
     private TextView status;
+    private ImageLabeler imageLabeler;
+    private FaceDetector faceDetector;
 
     @Override
     public void onCreate(Bundle state) {
         super.onCreate(state);
+        imageLabeler = com.google.mlkit.vision.label.ImageLabeling.getClient(
+                ImageLabelerOptions.DEFAULT_OPTIONS);
+        FaceDetectorOptions faceOptions = new FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .build();
+        faceDetector = FaceDetection.getClient(faceOptions);
+
         buildUi();
+
         if (Build.VERSION.SDK_INT <= 28 &&
                 checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                         != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 100);
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        executor.shutdownNow();
+        if (imageLabeler != null) imageLabeler.close();
+        if (faceDetector != null) faceDetector.close();
     }
 
     private int dp(int n) {
@@ -63,11 +106,13 @@ public class MainActivity extends Activity {
         int dark = Color.rgb(123, 56, 88);
         int light = Color.rgb(255, 244, 248);
 
+        FrameLayout shell = new FrameLayout(this);
+        shell.setBackgroundColor(pink);
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(dp(28), dp(48), dp(28), dp(28));
-        root.setBackgroundColor(pink);
+        root.setPadding(dp(28), dp(48), dp(28), dp(88));
 
         ImageView heart = new ImageView(this);
         heart.setImageResource(R.drawable.heart);
@@ -108,7 +153,7 @@ public class MainActivity extends Activity {
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
 
         status = new TextView(this);
-        status.setText("Ready");
+        status.setText("Ready · people only");
         status.setTextColor(dark);
         status.setTextSize(13);
         status.setGravity(Gravity.CENTER);
@@ -118,8 +163,25 @@ public class MainActivity extends Activity {
         statusParams.setMargins(0, dp(20), 0, 0);
         root.addView(status, statusParams);
 
-        setContentView(root);
+        FrameLayout.LayoutParams rootParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        shell.addView(root, rootParams);
+
+        Button galleryButton = new Button(this);
+        galleryButton.setText("GALLERY");
+        galleryButton.setTextSize(11);
+        galleryButton.setTextColor(dark);
+        galleryButton.setAllCaps(false);
+        galleryButton.setBackgroundColor(Color.argb(225, 255, 244, 248));
+        FrameLayout.LayoutParams galleryParams =
+                new FrameLayout.LayoutParams(dp(112), dp(48), Gravity.BOTTOM | Gravity.END);
+        galleryParams.setMargins(0, 0, dp(18), dp(18));
+        shell.addView(galleryButton, galleryParams);
+
+        setContentView(shell);
         downloadButton.setOnClickListener(v -> startDownload());
+        galleryButton.setOnClickListener(v ->
+                startActivity(new Intent(MainActivity.this, GalleryActivity.class)));
     }
 
     private void startDownload() {
@@ -137,7 +199,7 @@ public class MainActivity extends Activity {
                 DownloadResult result = scanAndDownload(pageUrl);
                 runOnUiThread(() -> {
                     status.setText("Downloaded " + result.saved +
-                            " images\nPictures/Sweet/" + result.folder);
+                            " people images\nPictures/Sweet/" + result.folder);
                     Toast.makeText(this, "Download complete", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
@@ -162,31 +224,106 @@ public class MainActivity extends Activity {
         LinkedHashSet<String> urls = extractImages(doc, resolved);
         setStatus("Found " + urls.size() + " candidates");
 
-        Set<String> signatures = new LinkedHashSet<>();
+        List<long[]> seenHashes = new ArrayList<>();
         int saved = 0;
-        int index = 1;
+        int checked = 0;
 
         for (String imageUrl : urls) {
+            checked++;
             try {
                 byte[] data = fetchBytes(imageUrl, resolved);
                 if (data.length < 12000) continue;
 
-                String sig = data.length + ":" + quickHash(data);
-                if (!signatures.add(sig)) continue;
+                Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
+                if (bitmap == null || Math.min(bitmap.getWidth(), bitmap.getHeight()) < 180) {
+                    if (bitmap != null) bitmap.recycle();
+                    continue;
+                }
 
+                long[] hash = perceptualHash(bitmap);
+                if (isVisualDuplicate(hash, seenHashes)) {
+                    bitmap.recycle();
+                    continue;
+                }
+
+                setStatus("Checking people " + checked + "/" + urls.size());
+                if (!containsPerson(bitmap)) {
+                    bitmap.recycle();
+                    continue;
+                }
+
+                seenHashes.add(hash);
                 String ext = extension(imageUrl, data);
-                saveToPictures(folder, String.format(Locale.US, "%03d.%s", index++, ext),
-                        data, ext);
+                String name = String.format(Locale.US, "%03d.%s", saved + 1, ext);
+                Uri savedUri = saveToPictures(folder, name, data, ext);
+                recordGalleryItem(folder, name, savedUri);
                 saved++;
-                setStatus("Downloading " + saved + "/" + urls.size());
+                bitmap.recycle();
+                setStatus("Saved " + saved + " people images");
             } catch (Exception ignored) {
             }
         }
         return new DownloadResult(folder, saved);
     }
 
+    private boolean containsPerson(Bitmap bitmap) {
+        try {
+            InputImage input = InputImage.fromBitmap(bitmap, 0);
+
+            List<Face> faces = Tasks.await(faceDetector.process(input));
+            if (faces != null && !faces.isEmpty()) return true;
+
+            List<ImageLabel> labels = Tasks.await(imageLabeler.process(input));
+            if (labels != null) {
+                Set<String> humanLabels = new LinkedHashSet<>(Arrays.asList(
+                        "person", "people", "human", "portrait", "selfie", "face",
+                        "man", "woman", "boy", "girl", "child", "baby"
+                ));
+                for (ImageLabel label : labels) {
+                    String text = label.getText().toLowerCase(Locale.ROOT).trim();
+                    if (label.getConfidence() >= 0.35f && humanLabels.contains(text)) return true;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    private long[] perceptualHash(Bitmap source) {
+        Bitmap scaled = Bitmap.createScaledBitmap(source, 16, 16, true);
+        int[] pixels = new int[256];
+        scaled.getPixels(pixels, 0, 16, 0, 0, 16, 16);
+        if (scaled != source) scaled.recycle();
+
+        long total = 0;
+        int[] lum = new int[256];
+        for (int i = 0; i < pixels.length; i++) {
+            int c = pixels[i];
+            int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+            lum[i] = y;
+            total += y;
+        }
+        int avg = (int) (total / 256L);
+        long[] bits = new long[4];
+        for (int i = 0; i < 256; i++) {
+            if (lum[i] >= avg) bits[i / 64] |= (1L << (i % 64));
+        }
+        return bits;
+    }
+
+    private boolean isVisualDuplicate(long[] hash, List<long[]> seen) {
+        for (long[] old : seen) {
+            int distance = 0;
+            for (int i = 0; i < 4; i++) {
+                distance += Long.bitCount(hash[i] ^ old[i]);
+            }
+            if (distance <= 14) return true;
+        }
+        return false;
+    }
+
     private LinkedHashSet<String> extractImages(Document doc, String base) {
-        LinkedHashSet<String> out = new LinkedHashSet<>();
+        LinkedHashMap<String, String> out = new LinkedHashMap<>();
         String[] attrs = {
                 "src", "data-src", "data-original", "data-lazy-src", "data-image",
                 "data-url", "data-full", "data-full-src", "data-large", "data-zoom-image",
@@ -223,18 +360,18 @@ public class MainActivity extends Activity {
             }
         }
 
-        out.removeIf(u -> {
-            String lower = u.toLowerCase(Locale.ROOT);
+        out.entrySet().removeIf(entry -> {
+            String lower = entry.getValue().toLowerCase(Locale.ROOT);
             return lower.contains("favicon") || lower.contains("sprite") ||
                     lower.contains("/logo") || lower.contains("avatar") ||
                     lower.contains("emoji") || lower.contains("badge") ||
                     lower.contains("tracking") || lower.contains("pixel.");
         });
 
-        return out;
+        return new LinkedHashSet<>(out.values());
     }
 
-    private void addUrl(Set<String> out, String raw, String base) {
+    private void addUrl(Map<String, String> out, String raw, String base) {
         if (raw == null) return;
         raw = raw.trim();
         if (raw.isEmpty() || raw.startsWith("data:") || raw.startsWith("blob:") ||
@@ -242,9 +379,33 @@ public class MainActivity extends Activity {
         try {
             URL url = new URL(new URL(base), raw);
             String value = url.toString();
-            if (value.startsWith("http://") || value.startsWith("https://")) out.add(value);
+            if (!value.startsWith("http://") && !value.startsWith("https://")) return;
+            out.putIfAbsent(canonicalImageKey(url), value);
         } catch (Exception ignored) {
         }
+    }
+
+    private String canonicalImageKey(URL url) {
+        StringBuilder key = new StringBuilder();
+        key.append(url.getHost().toLowerCase(Locale.ROOT))
+                .append(url.getPath().replaceAll("/+$", "").toLowerCase(Locale.ROOT));
+
+        String query = url.getQuery();
+        if (query == null || query.isEmpty()) return key.toString();
+
+        Set<String> resizeKeys = new LinkedHashSet<>(Arrays.asList(
+                "w", "width", "h", "height", "q", "quality", "format",
+                "fit", "crop", "auto", "dpr", "resize"
+        ));
+        List<String> kept = new ArrayList<>();
+        for (String part : query.split("&")) {
+            String[] pair = part.split("=", 2);
+            String name = URLDecoder.decode(pair[0], StandardCharsets.UTF_8)
+                    .toLowerCase(Locale.ROOT);
+            if (!resizeKeys.contains(name)) kept.add(part);
+        }
+        if (!kept.isEmpty()) key.append("?").append(String.join("&", kept));
+        return key.toString();
     }
 
     private String detectTitle(Document doc, String pageUrl) {
@@ -252,10 +413,8 @@ public class MainActivity extends Activity {
         if (og != null && !og.attr("content").trim().isEmpty()) {
             return sanitize(og.attr("content"));
         }
-
         Element h1 = doc.selectFirst("h1");
         if (h1 != null && !h1.text().trim().isEmpty()) return sanitize(h1.text());
-
         if (!doc.title().trim().isEmpty()) return sanitize(doc.title());
 
         try {
@@ -296,13 +455,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private long quickHash(byte[] data) {
-        long h = 1125899906842597L;
-        int step = Math.max(1, data.length / 2048);
-        for (int i = 0; i < data.length; i += step) h = 31 * h + (data[i] & 255);
-        return h;
-    }
-
     private String extension(String url, byte[] data) {
         String lower = url.toLowerCase(Locale.ROOT);
         if (lower.contains(".png")) return "png";
@@ -312,7 +464,7 @@ public class MainActivity extends Activity {
         return "jpg";
     }
 
-    private void saveToPictures(String folder, String name, byte[] data, String ext)
+    private Uri saveToPictures(String folder, String name, byte[] data, String ext)
             throws Exception {
         String mime = ext.equals("png") ? "image/png" :
                 ext.equals("webp") ? "image/webp" :
@@ -333,14 +485,32 @@ public class MainActivity extends Activity {
                 if (out == null) throw new Exception("Cannot open output");
                 out.write(data);
             }
+            return uri;
         } else {
             File dir = new File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
                     "Sweet/" + folder);
             if (!dir.exists() && !dir.mkdirs()) throw new Exception("Cannot create folder");
-            try (FileOutputStream out = new FileOutputStream(new File(dir, name))) {
+            File file = new File(dir, name);
+            try (FileOutputStream out = new FileOutputStream(file)) {
                 out.write(data);
             }
+            return Uri.fromFile(file);
+        }
+    }
+
+    private void recordGalleryItem(String folder, String name, Uri uri) {
+        try {
+            SharedPreferences prefs = getSharedPreferences("sweet_gallery", MODE_PRIVATE);
+            JSONArray array = new JSONArray(prefs.getString("items", "[]"));
+            JSONObject item = new JSONObject();
+            item.put("folder", folder);
+            item.put("name", name);
+            item.put("uri", uri.toString());
+            item.put("time", System.currentTimeMillis());
+            array.put(item);
+            prefs.edit().putString("items", array.toString()).apply();
+        } catch (Exception ignored) {
         }
     }
 
@@ -351,7 +521,6 @@ public class MainActivity extends Activity {
     static class DownloadResult {
         final String folder;
         final int saved;
-
         DownloadResult(String folder, int saved) {
             this.folder = folder;
             this.saved = saved;
