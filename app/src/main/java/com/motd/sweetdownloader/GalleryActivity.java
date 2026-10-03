@@ -2,14 +2,15 @@ package com.motd.sweetdownloader;
 
 import android.app.Activity;
 import android.app.Dialog;
+import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.Button;
 import android.widget.GridLayout;
-import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -116,11 +117,31 @@ public class GalleryActivity extends Activity {
         card.setPadding(dp(12), dp(12), dp(12), dp(12));
         card.setBackgroundColor(Color.argb(185, 255, 244, 248));
 
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+
         TextView name = new TextView(this);
         name.setText(folder + "  ·  " + items.size());
         name.setTextColor(dark);
         name.setTextSize(14);
-        card.addView(name, new LinearLayout.LayoutParams(
+        header.addView(name, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button lookbook = new Button(this);
+        lookbook.setText("LOOKBOOK");
+        lookbook.setTextSize(10);
+        lookbook.setTextColor(dark);
+        lookbook.setAllCaps(false);
+        lookbook.setBackgroundColor(Color.argb(235, 255, 214, 231));
+        header.addView(lookbook, new LinearLayout.LayoutParams(dp(108), dp(42)));
+        lookbook.setOnClickListener(v -> {
+            Intent intent = new Intent(GalleryActivity.this, LookbookActivity.class);
+            intent.putExtra("folder", folder);
+            startActivity(intent);
+        });
+
+        card.addView(header, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         GridLayout grid = new GridLayout(this);
@@ -166,11 +187,6 @@ public class GalleryActivity extends Activity {
         dialog.setContentView(image, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setLayout(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT);
-        }
         dialog.show();
         if (dialog.getWindow() != null) {
             dialog.getWindow().setLayout(
