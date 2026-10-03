@@ -49,7 +49,6 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLDecoder;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -63,6 +62,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
+    private static final int MAX_PAGES = 12;
+    private static final String USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/141 Mobile Safari/537.36";
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private EditText urlInput;
     private Button downloadButton;
@@ -73,8 +76,10 @@ public class MainActivity extends Activity {
     @Override
     public void onCreate(Bundle state) {
         super.onCreate(state);
+
         imageLabeler = com.google.mlkit.vision.label.ImageLabeling.getClient(
                 ImageLabelerOptions.DEFAULT_OPTIONS);
+
         FaceDetectorOptions faceOptions = new FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
                 .build();
@@ -153,7 +158,7 @@ public class MainActivity extends Activity {
                 new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(54)));
 
         status = new TextView(this);
-        status.setText("Ready · people only");
+        status.setText("Ready · people only · auto pages");
         status.setTextColor(dark);
         status.setTextSize(13);
         status.setGravity(Gravity.CENTER);
@@ -179,6 +184,7 @@ public class MainActivity extends Activity {
         shell.addView(galleryButton, galleryParams);
 
         setContentView(shell);
+
         downloadButton.setOnClickListener(v -> startDownload());
         galleryButton.setOnClickListener(v ->
                 startActivity(new Intent(MainActivity.this, GalleryActivity.class)));
@@ -199,7 +205,8 @@ public class MainActivity extends Activity {
                 DownloadResult result = scanAndDownload(pageUrl);
                 runOnUiThread(() -> {
                     status.setText("Downloaded " + result.saved +
-                            " people images\nPictures/Sweet/" + result.folder);
+                            " people images · " + result.pages + " pages\nPictures/Sweet/" +
+                            result.folder);
                     Toast.makeText(this, "Download complete", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
@@ -212,17 +219,52 @@ public class MainActivity extends Activity {
     }
 
     private DownloadResult scanAndDownload(String pageUrl) throws Exception {
-        Document doc = Jsoup.connect(pageUrl)
-                .userAgent("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/141 Mobile Safari/537.36")
-                .referrer(pageUrl)
-                .timeout(30000)
-                .followRedirects(true)
-                .get();
+        Document firstDoc = fetchDocument(pageUrl);
+        String resolved = firstDoc.location();
+        String folder = detectTitle(firstDoc, resolved) + "_" + System.currentTimeMillis();
 
-        String resolved = doc.location();
-        String folder = detectTitle(doc, resolved) + "_" + System.currentTimeMillis();
-        LinkedHashSet<String> urls = extractImages(doc, resolved);
-        setStatus("Found " + urls.size() + " candidates");
+        List<String> pageQueue = new ArrayList<>();
+        Set<String> seenPages = new LinkedHashSet<>();
+        LinkedHashMap<String, String> allImages = new LinkedHashMap<>();
+
+        pageQueue.add(resolved);
+        seenPages.add(normalizePageUrl(resolved));
+
+        int pageIndex = 0;
+        while (pageIndex < pageQueue.size() && pageIndex < MAX_PAGES) {
+            String currentUrl = pageQueue.get(pageIndex);
+            Document doc = pageIndex == 0 ? firstDoc : fetchDocument(currentUrl);
+
+            setStatus("Scanning page " + (pageIndex + 1) + "/" +
+                    Math.min(MAX_PAGES, Math.max(pageQueue.size(), pageIndex + 1)));
+
+            LinkedHashSet<String> pageImages = extractImages(doc, doc.location());
+            for (String imageUrl : pageImages) {
+                try {
+                    URL parsed = new URL(imageUrl);
+                    allImages.putIfAbsent(canonicalImageKey(parsed), imageUrl);
+                } catch (Exception ignored) {
+                }
+            }
+
+            if (pageQueue.size() < MAX_PAGES) {
+                List<String> discovered = discoverPaginationLinks(
+                        doc, doc.location(), resolved, MAX_PAGES - pageQueue.size());
+
+                for (String next : discovered) {
+                    String normalized = normalizePageUrl(next);
+                    if (seenPages.add(normalized)) {
+                        pageQueue.add(next);
+                        if (pageQueue.size() >= MAX_PAGES) break;
+                    }
+                }
+            }
+
+            pageIndex++;
+        }
+
+        List<String> urls = new ArrayList<>(allImages.values());
+        setStatus("Pages " + pageIndex + " · " + urls.size() + " candidates");
 
         List<long[]> seenHashes = new ArrayList<>();
         int saved = 0;
@@ -253,17 +295,133 @@ public class MainActivity extends Activity {
                 }
 
                 seenHashes.add(hash);
+
                 String ext = extension(imageUrl, data);
                 String name = String.format(Locale.US, "%03d.%s", saved + 1, ext);
                 Uri savedUri = saveToPictures(folder, name, data, ext);
                 recordGalleryItem(folder, name, savedUri);
+
                 saved++;
                 bitmap.recycle();
-                setStatus("Saved " + saved + " people images");
+                setStatus("Saved " + saved + " · page set " + pageIndex);
             } catch (Exception ignored) {
             }
         }
-        return new DownloadResult(folder, saved);
+
+        return new DownloadResult(folder, saved, pageIndex);
+    }
+
+    private Document fetchDocument(String pageUrl) throws Exception {
+        return Jsoup.connect(pageUrl)
+                .userAgent(USER_AGENT)
+                .referrer(pageUrl)
+                .timeout(30000)
+                .followRedirects(true)
+                .get();
+    }
+
+    private List<String> discoverPaginationLinks(
+            Document doc, String currentUrl, String rootUrl, int remaining) {
+        List<String> found = new ArrayList<>();
+        if (remaining <= 0) return found;
+
+        try {
+            URL root = new URL(rootUrl);
+            String rootHost = root.getHost().toLowerCase(Locale.ROOT);
+            String rootParent = parentPath(root.getPath());
+
+            for (Element a : doc.select("a[href]")) {
+                if (found.size() >= remaining) break;
+
+                String raw = a.attr("href").trim();
+                if (raw.isEmpty() || raw.startsWith("#") ||
+                        raw.startsWith("javascript:") || raw.startsWith("mailto:")) {
+                    continue;
+                }
+
+                URL candidate = new URL(new URL(currentUrl), raw);
+                if (!candidate.getProtocol().equals("http") &&
+                        !candidate.getProtocol().equals("https")) {
+                    continue;
+                }
+
+                if (!candidate.getHost().toLowerCase(Locale.ROOT).equals(rootHost)) {
+                    continue;
+                }
+
+                if (!parentPath(candidate.getPath()).equals(rootParent)) {
+                    continue;
+                }
+
+                String text = a.text().trim().toLowerCase(Locale.ROOT);
+                String rel = a.attr("rel").toLowerCase(Locale.ROOT);
+                String cls = a.className().toLowerCase(Locale.ROOT);
+                String href = candidate.toString().toLowerCase(Locale.ROOT);
+                String query = candidate.getQuery() == null
+                        ? "" : candidate.getQuery().toLowerCase(Locale.ROOT);
+                String path = candidate.getPath().toLowerCase(Locale.ROOT);
+                String marker = text + " " + rel + " " + cls;
+
+                boolean looksPaged =
+                        marker.contains("next") ||
+                        marker.contains("pagination") ||
+                        marker.contains("pager") ||
+                        text.contains("下一") ||
+                        text.contains("下頁") ||
+                        text.contains("下页") ||
+                        text.equals(">") ||
+                        text.equals("›") ||
+                        text.equals("»") ||
+                        query.matches("(?i)(^|.*&)(page|paged|p)=\\d+(&.*|$)") ||
+                        path.matches("(?i).*/page/\\d+/?$") ||
+                        path.matches("(?i).*(?:[-_/])\\d+(?:\\.html?)?$");
+
+                if (!looksPaged) continue;
+
+                String normalized = normalizePageUrl(candidate.toString());
+                if (normalized.equals(normalizePageUrl(currentUrl))) continue;
+
+                boolean duplicate = false;
+                for (String old : found) {
+                    if (normalizePageUrl(old).equals(normalized)) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (!duplicate) found.add(candidate.toString());
+            }
+        } catch (Exception ignored) {
+        }
+
+        return found;
+    }
+
+    private String parentPath(String path) {
+        if (path == null || path.isEmpty()) return "/";
+        int slash = path.lastIndexOf('/');
+        if (slash < 0) return "/";
+        return path.substring(0, slash + 1).toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizePageUrl(String value) {
+        try {
+            URL u = new URL(value);
+            String protocol = u.getProtocol().toLowerCase(Locale.ROOT);
+            String host = u.getHost().toLowerCase(Locale.ROOT);
+            int port = u.getPort();
+
+            StringBuilder out = new StringBuilder();
+            out.append(protocol).append("://").append(host);
+            if (port != -1 && port != u.getDefaultPort()) out.append(":").append(port);
+            out.append(u.getPath().replaceAll("/+$", ""));
+
+            if (u.getQuery() != null && !u.getQuery().isEmpty()) {
+                out.append("?").append(u.getQuery());
+            }
+            return out.toString();
+        } catch (Exception e) {
+            return value;
+        }
     }
 
     private boolean containsPerson(Bitmap bitmap) {
@@ -279,9 +437,12 @@ public class MainActivity extends Activity {
                         "person", "people", "human", "portrait", "selfie", "face",
                         "man", "woman", "boy", "girl", "child", "baby"
                 ));
+
                 for (ImageLabel label : labels) {
                     String text = label.getText().toLowerCase(Locale.ROOT).trim();
-                    if (label.getConfidence() >= 0.35f && humanLabels.contains(text)) return true;
+                    if (label.getConfidence() >= 0.35f && humanLabels.contains(text)) {
+                        return true;
+                    }
                 }
             }
         } catch (Exception ignored) {
@@ -297,14 +458,19 @@ public class MainActivity extends Activity {
 
         long total = 0;
         int[] lum = new int[256];
+
         for (int i = 0; i < pixels.length; i++) {
             int c = pixels[i];
-            int y = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000;
+            int y = (Color.red(c) * 299 +
+                    Color.green(c) * 587 +
+                    Color.blue(c) * 114) / 1000;
             lum[i] = y;
             total += y;
         }
+
         int avg = (int) (total / 256L);
         long[] bits = new long[4];
+
         for (int i = 0; i < 256; i++) {
             if (lum[i] >= avg) bits[i / 64] |= (1L << (i % 64));
         }
@@ -324,6 +490,7 @@ public class MainActivity extends Activity {
 
     private LinkedHashSet<String> extractImages(Document doc, String base) {
         LinkedHashMap<String, String> out = new LinkedHashMap<>();
+
         String[] attrs = {
                 "src", "data-src", "data-original", "data-lazy-src", "data-image",
                 "data-url", "data-full", "data-full-src", "data-large", "data-zoom-image",
@@ -334,6 +501,7 @@ public class MainActivity extends Activity {
 
         for (Element e : doc.select("img,source,video")) {
             for (String attr : attrs) addUrl(out, e.attr(attr), base);
+
             for (String attr : new String[]{"srcset", "data-srcset", "data-lazy-srcset"}) {
                 String value = e.attr(attr);
                 if (!value.isEmpty()) {
@@ -355,6 +523,7 @@ public class MainActivity extends Activity {
         for (Element a : doc.select("a[href]")) {
             String href = a.absUrl("href");
             String lower = href.toLowerCase(Locale.ROOT);
+
             if (lower.matches(".*\\.(jpg|jpeg|png|webp|gif|avif|bmp)(\\?.*)?$")) {
                 addUrl(out, href, base);
             }
@@ -362,10 +531,14 @@ public class MainActivity extends Activity {
 
         out.entrySet().removeIf(entry -> {
             String lower = entry.getValue().toLowerCase(Locale.ROOT);
-            return lower.contains("favicon") || lower.contains("sprite") ||
-                    lower.contains("/logo") || lower.contains("avatar") ||
-                    lower.contains("emoji") || lower.contains("badge") ||
-                    lower.contains("tracking") || lower.contains("pixel.");
+            return lower.contains("favicon") ||
+                    lower.contains("sprite") ||
+                    lower.contains("/logo") ||
+                    lower.contains("avatar") ||
+                    lower.contains("emoji") ||
+                    lower.contains("badge") ||
+                    lower.contains("tracking") ||
+                    lower.contains("pixel.");
         });
 
         return new LinkedHashSet<>(out.values());
@@ -374,11 +547,18 @@ public class MainActivity extends Activity {
     private void addUrl(Map<String, String> out, String raw, String base) {
         if (raw == null) return;
         raw = raw.trim();
-        if (raw.isEmpty() || raw.startsWith("data:") || raw.startsWith("blob:") ||
-                raw.startsWith("javascript:")) return;
+
+        if (raw.isEmpty() ||
+                raw.startsWith("data:") ||
+                raw.startsWith("blob:") ||
+                raw.startsWith("javascript:")) {
+            return;
+        }
+
         try {
             URL url = new URL(new URL(base), raw);
             String value = url.toString();
+
             if (!value.startsWith("http://") && !value.startsWith("https://")) return;
             out.putIfAbsent(canonicalImageKey(url), value);
         } catch (Exception ignored) {
@@ -387,6 +567,7 @@ public class MainActivity extends Activity {
 
     private String canonicalImageKey(URL url) {
         StringBuilder key = new StringBuilder();
+
         key.append(url.getHost().toLowerCase(Locale.ROOT))
                 .append(url.getPath().replaceAll("/+$", "").toLowerCase(Locale.ROOT));
 
@@ -397,13 +578,16 @@ public class MainActivity extends Activity {
                 "w", "width", "h", "height", "q", "quality", "format",
                 "fit", "crop", "auto", "dpr", "resize"
         ));
+
         List<String> kept = new ArrayList<>();
         for (String part : query.split("&")) {
             String[] pair = part.split("=", 2);
             String name = URLDecoder.decode(pair[0], StandardCharsets.UTF_8)
                     .toLowerCase(Locale.ROOT);
+
             if (!resizeKeys.contains(name)) kept.add(part);
         }
+
         if (!kept.isEmpty()) key.append("?").append(String.join("&", kept));
         return key.toString();
     }
@@ -413,8 +597,10 @@ public class MainActivity extends Activity {
         if (og != null && !og.attr("content").trim().isEmpty()) {
             return sanitize(og.attr("content"));
         }
+
         Element h1 = doc.selectFirst("h1");
         if (h1 != null && !h1.text().trim().isEmpty()) return sanitize(h1.text());
+
         if (!doc.title().trim().isEmpty()) return sanitize(doc.title());
 
         try {
@@ -426,8 +612,11 @@ public class MainActivity extends Activity {
 
     private String sanitize(String s) {
         if (s == null) return "Sweet_Gallery";
+
         s = s.replaceAll("[<>:\"/\\\\|?*\\x00-\\x1F]", " ")
-                .replaceAll("\\s+", " ").trim();
+                .replaceAll("\\s+", " ")
+                .trim();
+
         if (s.length() > 80) s = s.substring(0, 80);
         return s.isEmpty() ? "Sweet_Gallery" : s;
     }
@@ -437,18 +626,20 @@ public class MainActivity extends Activity {
         connection.setConnectTimeout(20000);
         connection.setReadTimeout(25000);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent",
-                "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/141 Mobile Safari/537.36");
+        connection.setRequestProperty("User-Agent", USER_AGENT);
         connection.setRequestProperty("Referer", referer);
 
         try (InputStream input = new BufferedInputStream(connection.getInputStream());
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+
             byte[] buffer = new byte[16384];
             int n;
+
             while ((n = input.read(buffer)) != -1) {
                 output.write(buffer, 0, n);
                 if (output.size() > 35 * 1024 * 1024) break;
             }
+
             return output.toByteArray();
         } finally {
             connection.disconnect();
@@ -457,15 +648,18 @@ public class MainActivity extends Activity {
 
     private String extension(String url, byte[] data) {
         String lower = url.toLowerCase(Locale.ROOT);
+
         if (lower.contains(".png")) return "png";
         if (lower.contains(".webp")) return "webp";
         if (lower.contains(".gif")) return "gif";
         if (data.length > 4 && (data[0] & 255) == 0x89 && data[1] == 'P') return "png";
+
         return "jpg";
     }
 
     private Uri saveToPictures(String folder, String name, byte[] data, String ext)
             throws Exception {
+
         String mime = ext.equals("png") ? "image/png" :
                 ext.equals("webp") ? "image/webp" :
                         ext.equals("gif") ? "image/gif" : "image/jpeg";
@@ -479,22 +673,29 @@ public class MainActivity extends Activity {
 
             Uri uri = getContentResolver().insert(
                     MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+
             if (uri == null) throw new Exception("Cannot create image file");
 
             try (java.io.OutputStream out = getContentResolver().openOutputStream(uri)) {
                 if (out == null) throw new Exception("Cannot open output");
                 out.write(data);
             }
+
             return uri;
         } else {
             File dir = new File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
                     "Sweet/" + folder);
-            if (!dir.exists() && !dir.mkdirs()) throw new Exception("Cannot create folder");
+
+            if (!dir.exists() && !dir.mkdirs()) {
+                throw new Exception("Cannot create folder");
+            }
+
             File file = new File(dir, name);
             try (FileOutputStream out = new FileOutputStream(file)) {
                 out.write(data);
             }
+
             return Uri.fromFile(file);
         }
     }
@@ -503,11 +704,13 @@ public class MainActivity extends Activity {
         try {
             SharedPreferences prefs = getSharedPreferences("sweet_gallery", MODE_PRIVATE);
             JSONArray array = new JSONArray(prefs.getString("items", "[]"));
+
             JSONObject item = new JSONObject();
             item.put("folder", folder);
             item.put("name", name);
             item.put("uri", uri.toString());
             item.put("time", System.currentTimeMillis());
+
             array.put(item);
             prefs.edit().putString("items", array.toString()).apply();
         } catch (Exception ignored) {
@@ -521,9 +724,12 @@ public class MainActivity extends Activity {
     static class DownloadResult {
         final String folder;
         final int saved;
-        DownloadResult(String folder, int saved) {
+        final int pages;
+
+        DownloadResult(String folder, int saved, int pages) {
             this.folder = folder;
             this.saved = saved;
+            this.pages = pages;
         }
     }
 }
