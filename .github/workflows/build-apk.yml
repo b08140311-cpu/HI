@@ -20,26 +20,45 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - uses: android-actions/setup-android@v3
-      - name: Prepare Android SDK
-        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+      - name: Prepare verified Android SDK
+        run: |
+          sdk_root="$RUNNER_TEMP/sweet-android-sdk"
+          cli_zip="$RUNNER_TEMP/android-cli-19.zip"
+          curl --fail --location --retry 3 https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip -o "$cli_zip"
+          printf '5fdcc763663eefb86a5b8879697aa6088b041e70  %s\n' "$cli_zip" | sha1sum --strict -c -
+          mkdir -p "$sdk_root/cmdline-tools"
+          unzip -q "$cli_zip" -d "$sdk_root/cmdline-tools"
+          mv "$sdk_root/cmdline-tools/cmdline-tools" "$sdk_root/cmdline-tools/latest"
+          export ANDROID_HOME="$sdk_root" ANDROID_SDK_ROOT="$sdk_root"
+          printf 'ANDROID_HOME=%s\nANDROID_SDK_ROOT=%s\n' "$sdk_root" "$sdk_root" >> "$GITHUB_ENV"
+          printf '%s\n' "$sdk_root/cmdline-tools/latest/bin" "$sdk_root/platform-tools" >> "$GITHUB_PATH"
+          set +e
+          yes | "$sdk_root/cmdline-tools/latest/bin/sdkmanager" --licenses > "$RUNNER_TEMP/sdk-licenses.log" 2>&1
+          sdk_status=${PIPESTATUS[1]}
+          set -e
+          if [ "$sdk_status" -ne 0 ]; then
+            tail -30 "$RUNNER_TEMP/sdk-licenses.log"
+            echo "::error::Android license setup failed (exit $sdk_status)"
+            exit "$sdk_status"
+          fi
+          "$sdk_root/cmdline-tools/latest/bin/sdkmanager" 'platform-tools' 'platforms;android-35' 'build-tools;34.0.0'
       - name: Build and test universal APK
         run: |
           gradle --no-daemon --max-workers=2 assembleDebug testDebugUnitTest lintDebug
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/SweetDownloader-2.0.1-universal.apk
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose dist/SweetDownloader-2.0.1-universal.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/SweetDownloader-2.0.2-universal.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose dist/SweetDownloader-2.0.2-universal.apk
       - name: Build ARM64 phone APK
         run: |
           gradle --no-daemon --max-workers=2 -PsweetAbi=arm64-v8a assembleDebug
-          cp app/build/outputs/apk/debug/app-debug.apk dist/SweetDownloader-2.0.1-arm64.apk
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose dist/SweetDownloader-2.0.1-arm64.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/SweetDownloader-2.0.2-arm64.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose dist/SweetDownloader-2.0.2-arm64.apk
       - name: Package source, checksums and release notes
         run: |
-          git archive --format=zip --prefix=SweetDownloader-2.0.1/ HEAD > dist/SweetDownloader-2.0.1-source.zip
+          git archive --format=zip --prefix=SweetDownloader-2.0.2/ HEAD > dist/SweetDownloader-2.0.2-source.zip
           cp RELEASE_NOTES.md dist/RELEASE_NOTES.md
           cd dist
-          sha256sum SweetDownloader-2.0.1-*.apk SweetDownloader-2.0.1-source.zip > SHA256SUMS.txt
+          sha256sum SweetDownloader-2.0.2-*.apk SweetDownloader-2.0.2-source.zip > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Sweet-APK
@@ -63,9 +82,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            dist/SweetDownloader-2.0.1-arm64.apk \
-            dist/SweetDownloader-2.0.1-universal.apk \
-            dist/SweetDownloader-2.0.1-source.zip \
+            dist/SweetDownloader-2.0.2-arm64.apk \
+            dist/SweetDownloader-2.0.2-universal.apk \
+            dist/SweetDownloader-2.0.2-source.zip \
             dist/SHA256SUMS.txt \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
