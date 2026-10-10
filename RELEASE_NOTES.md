@@ -1,9 +1,9 @@
 圖片／影片下載版，Android 7.0（API 24）以上。
 
 下載檔案：
-- **SweetDownloader-2.0-arm64.apk**：一般 ARM64 Android 手機建議使用。
-- **SweetDownloader-2.0-universal.apk**：通用版本，包含 ARM64、32 位 ARM、x86 和 x86_64。
-- **SweetDownloader-2.0-source.zip**：此版本完整應用程式原始碼。
+- **SweetDownloader-2.0.1-arm64.apk**：一般 ARM64 Android 手機建議使用。
+- **SweetDownloader-2.0.1-universal.apk**：通用版本，包含 ARM64、32 位 ARM、x86 和 x86_64。
+- **SweetDownloader-2.0.1-source.zip**：此版本完整應用程式原始碼。
 - **SHA256SUMS.txt**：檔案校驗碼。
 
 功能：

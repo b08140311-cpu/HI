@@ -1,4 +1,4 @@
-# Sweet Downloader Android 2.0
+# Sweet Downloader Android 2.0.1
 
 Simple Android image and video downloader. No NudeNet, ML Kit, people/nudity classifiers, or adult-site-specific extraction is included.
 
