@@ -1,16 +1,27 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
-    <application android:theme="@style/Theme.Sweet" android:label="Sweet" android:allowBackup="true" android:supportsRtl="true">
+    <application android:theme="@style/Theme.Sweet" android:label="Sweet" android:icon="@drawable/heart" android:allowBackup="false" android:supportsRtl="true" android:extractNativeLibs="true" android:usesCleartextTraffic="true">
+        <service android:name=".DownloadService" android:exported="false" android:foregroundServiceType="dataSync"/>
+        <activity android:name=".VideoActivity" android:exported="false"/>
         <activity android:name=".SettingsActivity" android:screenOrientation="portrait" android:exported="false"/>
         <activity android:name=".HistoryActivity" android:screenOrientation="portrait" android:exported="false"/>
         <activity android:name=".CollectionActivity" android:screenOrientation="portrait" android:exported="false"/>
         <activity android:name=".LookbookActivity" android:screenOrientation="portrait" android:exported="false"/>
         <activity android:name=".GalleryActivity" android:screenOrientation="portrait" android:exported="false"/>
-        <activity android:name=".MainActivity" android:screenOrientation="portrait" android:exported="true">
+        <activity android:name=".MainActivity" android:launchMode="singleTop" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
             </intent-filter>
         </activity>
     </application>

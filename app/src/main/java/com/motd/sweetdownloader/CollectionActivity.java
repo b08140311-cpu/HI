@@ -65,7 +65,7 @@ public class CollectionActivity extends Activity {
         titleBox.addView(title);
 
         TextView meta = SweetUi.label(this,
-                items.size() + " 張圖片", 12, SweetUi.MUTED);
+                items.size() + " 個媒體檔案", 12, SweetUi.MUTED);
         titleBox.addView(meta);
 
         header.addView(titleBox, new LinearLayout.LayoutParams(
@@ -109,7 +109,7 @@ public class CollectionActivity extends Activity {
         for (GalleryItem item : items) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            image.setImageURI(item.uri);
+            MediaViews.thumbnail(image, item.uri);
             image.setBackground(SweetUi.rounded(SweetUi.PINK_SOFT, 14, this));
 
             GridLayout.LayoutParams gp = new GridLayout.LayoutParams();
@@ -192,13 +192,14 @@ public class CollectionActivity extends Activity {
     }
 
     private void openFullscreen(Uri uri) {
+        if (MediaViews.openVideo(this, uri)) return;
         android.app.Dialog dialog = new android.app.Dialog(this);
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
 
         ImageView image = new ImageView(this);
         image.setBackgroundColor(Color.BLACK);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        image.setImageURI(uri);
+        MediaViews.thumbnail(image, uri);
         image.setOnClickListener(v -> dialog.dismiss());
 
         dialog.setContentView(image, new ViewGroup.LayoutParams(

@@ -1,0 +1,7 @@
+<resources>
+    <item type="id" name="download_urls"/>
+    <item type="id" name="download_modes"/>
+    <item type="id" name="mode_images"/>
+    <item type="id" name="mode_videos"/>
+    <item type="id" name="mode_both"/>
+</resources>

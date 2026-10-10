@@ -88,7 +88,7 @@ public class HistoryActivity extends Activity {
         ImageView thumb = new ImageView(this);
         thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
         Uri first = firstUri(folder);
-        if (first != null) thumb.setImageURI(first);
+        if (first != null) MediaViews.thumbnail(thumb, first);
         else thumb.setBackground(SweetUi.rounded(SweetUi.PINK_SOFT, 14, this));
         card.addView(thumb, new LinearLayout.LayoutParams(
                 SweetUi.dp(this, 72), SweetUi.dp(this, 72)));
@@ -102,8 +102,9 @@ public class HistoryActivity extends Activity {
         info.addView(name);
 
         TextView meta = SweetUi.label(this,
-                saved + " 張 · " + pages + " 頁", 12, SweetUi.MUTED);
+                o.optInt("images", saved) + " 圖片 · " + o.optInt("videos", 0) + " 影片 · " + pages + " 頁", 12, SweetUi.MUTED);
         info.addView(meta);
+        info.addView(SweetUi.label(this, o.optString("outcome", "完成") + " · 略過 " + o.optInt("skipped", 0) + " · 失敗 " + o.optInt("failed", 0), 12, SweetUi.MUTED));
 
         if (time > 0) {
             String date = new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
@@ -114,13 +115,21 @@ public class HistoryActivity extends Activity {
         card.addView(info, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        TextView check = SweetUi.label(this, "✓", 22, ColorCompat.green());
+        TextView check = SweetUi.label(this, o.optInt("failed", 0) > 0 ? "!" : "✓", 22, ColorCompat.green());
         card.addView(check);
 
         card.setOnClickListener(v -> {
             Intent intent = new Intent(HistoryActivity.this, CollectionActivity.class);
             intent.putExtra("folder", folder);
-            startActivity(intent);
+            StringBuilder details = new StringBuilder(source);
+            JSONArray errors = o.optJSONArray("errors");
+            if (errors != null) for (int j = 0; j < Math.min(errors.length(), 20); j++) {
+                JSONObject error = errors.optJSONObject(j);
+                if (error != null) details.append("\n\n").append(error.optString("url")).append("\n").append(error.optString("message"));
+            }
+            new android.app.AlertDialog.Builder(this).setTitle(o.optString("outcome", "下載紀錄"))
+                    .setMessage(details.toString()).setPositiveButton("查看媒體", (d, w) -> startActivity(intent))
+                    .setNegativeButton("關閉", null).show();
         });
 
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(

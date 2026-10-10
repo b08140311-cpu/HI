@@ -62,7 +62,7 @@ public class GalleryActivity extends Activity {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setGravity(Gravity.CENTER);
         albumsTab = SweetUi.pill(this, "合集", true);
-        allTab = SweetUi.pill(this, "全部圖片", false);
+        allTab = SweetUi.pill(this, "全部媒體", false);
         tabs.addView(albumsTab, new LinearLayout.LayoutParams(
                 0, SweetUi.dp(this, 42), 1f));
         LinearLayout.LayoutParams atp = new LinearLayout.LayoutParams(
@@ -108,7 +108,7 @@ public class GalleryActivity extends Activity {
 
         LinkedHashMap<String, Album> groups = loadAlbums();
         if (groups.isEmpty()) {
-            TextView empty = SweetUi.label(this, "No downloaded images yet", 15, SweetUi.MUTED);
+            TextView empty = SweetUi.label(this, "尚未下載圖片或影片", 15, SweetUi.MUTED);
             empty.setGravity(Gravity.CENTER);
             content.addView(empty, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, SweetUi.dp(this, 200)));
@@ -130,7 +130,7 @@ public class GalleryActivity extends Activity {
 
         ImageView cover = new ImageView(this);
         cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        cover.setImageURI(album.first);
+        MediaViews.thumbnail(cover, album.first);
         cover.setBackground(SweetUi.rounded(SweetUi.PINK_SOFT, 16, this));
         card.addView(cover, new LinearLayout.LayoutParams(
                 SweetUi.dp(this, 88), SweetUi.dp(this, 88)));
@@ -144,7 +144,7 @@ public class GalleryActivity extends Activity {
         info.addView(name);
 
         info.addView(SweetUi.label(this,
-                album.count + " 張圖片", 12, SweetUi.MUTED));
+                album.count + " 個媒體檔案", 12, SweetUi.MUTED));
 
         if (album.time > 0) {
             String date = new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault())
@@ -176,7 +176,7 @@ public class GalleryActivity extends Activity {
 
         List<Uri> items = loadAll();
         if (items.isEmpty()) {
-            TextView empty = SweetUi.label(this, "No downloaded images yet", 15, SweetUi.MUTED);
+            TextView empty = SweetUi.label(this, "尚未下載圖片或影片", 15, SweetUi.MUTED);
             empty.setGravity(Gravity.CENTER);
             content.addView(empty, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, SweetUi.dp(this, 200)));
@@ -193,7 +193,7 @@ public class GalleryActivity extends Activity {
         for (Uri uri : items) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            image.setImageURI(uri);
+            MediaViews.thumbnail(image, uri);
 
             GridLayout.LayoutParams gp = new GridLayout.LayoutParams();
             gp.width = cell;
@@ -247,13 +247,14 @@ public class GalleryActivity extends Activity {
     }
 
     private void openFullscreen(Uri uri) {
+        if (MediaViews.openVideo(this, uri)) return;
         android.app.Dialog dialog = new android.app.Dialog(this);
         dialog.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
 
         ImageView image = new ImageView(this);
         image.setBackgroundColor(Color.BLACK);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        image.setImageURI(uri);
+        MediaViews.thumbnail(image, uri);
         image.setOnClickListener(v -> dialog.dismiss());
 
         dialog.setContentView(image, new ViewGroup.LayoutParams(

@@ -3,6 +3,10 @@ on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    tags: [ 'v2.*' ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,8 +20,53 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle assembleDebug
+      - name: Prepare Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+      - name: Build and test universal APK
+        run: |
+          gradle --no-daemon --max-workers=2 assembleDebug testDebugUnitTest lintDebug
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/SweetDownloader-2.0-universal.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose dist/SweetDownloader-2.0-universal.apk
+      - name: Build ARM64 phone APK
+        run: |
+          gradle --no-daemon --max-workers=2 -PsweetAbi=arm64-v8a assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk dist/SweetDownloader-2.0-arm64.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose dist/SweetDownloader-2.0-arm64.apk
+      - name: Package source, checksums and release notes
+        run: |
+          git archive --format=zip --prefix=SweetDownloader-2.0/ HEAD > dist/SweetDownloader-2.0-source.zip
+          cp RELEASE_NOTES.md dist/RELEASE_NOTES.md
+          cd dist
+          sha256sum SweetDownloader-2.0-*.apk SweetDownloader-2.0-source.zip > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: Sweet-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: dist/
+          compression-level: 0
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v2.')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Sweet-APK
+          path: dist/
+      - name: Publish verified APKs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/SweetDownloader-2.0-arm64.apk \
+            dist/SweetDownloader-2.0-universal.apk \
+            dist/SweetDownloader-2.0-source.zip \
+            dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "Sweet Downloader $GITHUB_REF_NAME" \
+            --notes-file dist/RELEASE_NOTES.md

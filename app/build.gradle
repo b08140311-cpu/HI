@@ -1,5 +1,11 @@
 plugins { id 'com.android.application' }
 
+def supportedAbis = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86']
+def requestedAbi = providers.gradleProperty('sweetAbi').orNull
+if (requestedAbi != null && !supportedAbis.contains(requestedAbi)) {
+    throw new GradleException('Unsupported sweetAbi: ' + requestedAbi)
+}
+
 android {
     namespace 'com.motd.sweetdownloader'
     compileSdk 35
@@ -8,13 +14,20 @@ android {
         applicationId 'com.motd.sweetdownloader'
         minSdk 24
         targetSdk 35
-        versionCode 4
-        versionName '1.3'
+        versionCode 5
+        versionName '2.0'
+        ndk { abiFilters.addAll(requestedAbi == null ? supportedAbis : [requestedAbi]) }
     }
+
+    packaging { jniLibs { useLegacyPackaging = true } }
+    testOptions { unitTests.includeAndroidResources = true }
 }
 
 dependencies {
     implementation 'org.jsoup:jsoup:1.18.3'
-    implementation 'com.google.mlkit:image-labeling:17.0.9'
-    implementation 'com.google.mlkit:face-detection:16.1.7'
+    implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
+    implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.14.1'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
 }

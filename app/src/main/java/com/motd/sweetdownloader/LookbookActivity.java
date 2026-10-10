@@ -83,7 +83,7 @@ public class LookbookActivity extends Activity {
             image.setAdjustViewBounds(true);
             image.setScaleType(ImageView.ScaleType.FIT_CENTER);
             image.setBackgroundColor(Color.BLACK);
-            image.setImageURI(uri);
+            MediaViews.thumbnail(image, uri);
             image.setOnClickListener(v -> openFullscreen(uri));
 
             LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(
@@ -115,7 +115,7 @@ public class LookbookActivity extends Activity {
                 JSONObject o = arr.getJSONObject(i);
                 if (!folder.equals(o.optString("folder", ""))) continue;
                 String uri = o.optString("uri", "");
-                if (!uri.isEmpty()) out.add(Uri.parse(uri));
+                if (!uri.isEmpty() && !MediaViews.isVideo(this, Uri.parse(uri))) out.add(Uri.parse(uri));
             }
         } catch (Exception ignored) {}
         return out;
@@ -131,7 +131,7 @@ public class LookbookActivity extends Activity {
 
         ImageView image = new ImageView(this);
         image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        image.setImageURI(uri);
+        MediaViews.thumbnail(image, uri);
         shell.addView(image, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
